@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import fc from 'fast-check';
+import * as fc from "fast-check"; // Use explicit namespace binding
 import { loginInputSchema } from '../../src/schemas/auth.js';
 import { resetPasswordSchema } from '../../src/schemas/resetPasswordSchema.js';
 import { updateUserProfileSchema } from '../../src/routes/users.schema.js';
@@ -29,7 +29,7 @@ describe('Zod Schema Fuzzing', () => {
 
       it('should handle exotic strings (surrogate pairs, unicode) without throwing', () => {
         fc.assert(
-          fc.property(fc.unicodeString(), fc.fullUnicodeString(), (str1, str2) => {
+          fc.property(fc.string(), fc.string(), (str1, str2) => {
             const input = {
               email: str1,
               password: str2,

@@ -33,11 +33,16 @@ export interface CallbackResult {
  */
 
 export async function handleCallback(params: CallbackParams): Promise<CallbackResult> {
-  const { code, shop, state, hmac } = params;
-
-
   const clientId = process.env.SHOPIFY_CLIENT_ID ?? '';
   const clientSecret = process.env.SHOPIFY_CLIENT_SECRET ?? '';
+
+  // Environment guard: fail fast if the app is not configured.
+  if (!clientId || !clientSecret) {
+    logger.error({ event: 'shopify_callback_not_configured' }, 'Shopify app credentials are not configured on the server.');
+    return { success: false, error: 'Shopify app not configured' };
+  }
+
+  const { code, shop, state, hmac } = params;
 
   // Parameter completeness guard
   if (!code || !shop || !state) {

@@ -775,15 +775,15 @@ export function validatePassword(
 
   // Check for sequences
   if (hasSequentialChars(password)) {
-    warnings.push(
-      "Password contains sequential characters which reduce security",
+    errors.push(
+      "Password must not contain sequential characters (e.g., 'abc', '123')",
     );
     strengthScore -= 10;
   }
 
   // Check for keyboard patterns
   if (hasKeyboardPattern(password)) {
-    warnings.push("Password contains keyboard patterns which reduce security");
+    errors.push("Password must not contain keyboard patterns (e.g., 'qwerty')");
     strengthScore -= 10;
   }
 

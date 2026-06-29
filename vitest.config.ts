@@ -10,6 +10,8 @@ export default defineConfig({
       NODE_ENV: "test",
       SOROBAN_CONTRACT_ID:
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+      JWT_SECRET: "test-jwt-secret-key-at-least-thirty-two-characters-long",
+      ENCRYPTION_KEY: "01234567890123456789012345678901",
     },
     coverage: {
       provider: "v8",

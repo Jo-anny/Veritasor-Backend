@@ -6,12 +6,13 @@ import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest';
 import { submitAttestation, SorobanErrorCode } from '../../src/services/attestation/submit.js';
 import { fetchRazorpayRevenue } from '../../src/services/revenue/razorpayFetch.js';
 import { attestationRepository } from '../../src/repositories/attestation.js';
+import * as CryptoUtils from '../../src/services/merkle.js';
 import { AppError, ExternalServiceError } from '../../src/types/errors.js';
 
 // Mock dependencies
 vi.mock('../../src/services/revenue/razorpayFetch.js');
 vi.mock('../../src/repositories/attestation.js');
-vi.mock('../../src/services/merkle.js');
+vi.mock('../../src/services/merkle.js', async (importOriginal) => { const mod = await importOriginal(); return { ...mod, generateMerkleRoot: vi.fn() }; });
 
 const mockFetchRazorpayRevenue = vi.mocked(fetchRazorpayRevenue);
 const mockAttestationRepository = vi.mocked(attestationRepository);
@@ -45,6 +46,7 @@ describe('submitAttestation - Enhanced with retry logic', () => {
     vi.clearAllMocks();
     mockFetchRazorpayRevenue.mockResolvedValue(mockRevenue);
     mockAttestationRepository.create = vi.fn().mockResolvedValue(mockAttestation);
+    vi.spyOn(CryptoUtils, "generateMerkleRoot").mockReturnValue("0xmockedmerkleroothashstring");
   });
 
   afterEach(() => {

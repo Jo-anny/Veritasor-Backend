@@ -35,7 +35,7 @@ describe("PermissionService", () => {
       const permissions = PermissionService.getUserPermissions("admin");
 
       expect(permissions).toContain(IntegrationPermission.ADMIN);
-      expect(permissions.length).toBe(Object.values(IntegrationPermission).length);
+      expect(permissions.length).toEqual(Object.values(IntegrationPermission).length);
     });
 
     it("should return empty array for invalid role", () => {
@@ -301,7 +301,7 @@ describe("requirePermissions middleware", () => {
       customCheck,
     });
 
-    mockReq.params = { id: "biz_123_int" };
+    mockReq.params = { integrationId: "biz_123_int" };
     mockReq.headers = { "x-business-id": "biz_123" };
 
     await middleware(mockReq as Request, mockRes as Response, mockNext);
@@ -317,7 +317,7 @@ describe("requirePermissions middleware", () => {
       customCheck,
     });
 
-    mockReq.params = { id: "biz_123_int" };
+    mockReq.params = { integrationId: "biz_123_int" };
     mockReq.headers = { "x-business-id": "biz_123" };
 
     await middleware(mockReq as Request, mockRes as Response, mockNext);
@@ -330,7 +330,7 @@ describe("requirePermissions middleware", () => {
       checkOwnership: true,
     });
 
-    // No params.id set
+    // No params.integrationId set
     await middleware(mockReq as Request, mockRes as Response, mockNext);
 
     expect(mockNext).toHaveBeenCalled(); // Should pass since no ownership check needed

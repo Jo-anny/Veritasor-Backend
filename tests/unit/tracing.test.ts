@@ -37,36 +37,36 @@ class FakeSpan {
   }
 }
 
-vi.mock("@opentelemetry/api", () => ({
-  SpanKind: {
-    SERVER: "server",
-    CLIENT: "client",
-  },
-  SpanStatusCode: {
-    OK: "ok",
-    ERROR: "error",
-  },
-  context: {
-    active: () => ({}),
-    with: (_ctx: unknown, callback: () => unknown) => callback(),
-  },
-  propagation: {
-    extract: extractMock,
-  },
-  trace: {
-    getTracer: () => ({
-      startActiveSpan: (
-        name: string,
-        options: { attributes?: Record<string, unknown> },
-        callback: (span: FakeSpan) => unknown,
-      ) => {
-        const span = new FakeSpan(name, options);
-        spans.push(span);
-        return callback(span);
-      },
-    }),
-  },
-}));
+vi.mock("@opentelemetry/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@opentelemetry/api")>();
+  return {
+    ...actual,
+    createContextKey: vi.fn().mockReturnValue("mocked-context-key"),
+    context: {
+      ...actual.context,
+      active: () => ({}),
+      with: (_ctx: unknown, callback: () => unknown) => callback(),
+    },
+    propagation: {
+      ...actual.propagation,
+      extract: extractMock,
+    },
+    trace: {
+      ...actual.trace,
+      getTracer: () => ({
+        startActiveSpan: (
+          name: string,
+          options: { attributes?: Record<string, unknown> },
+          callback: (span: FakeSpan) => unknown,
+        ) => {
+          const span = new FakeSpan(name, options);
+          spans.push(span);
+          return callback(span);
+        },
+      }),
+    },
+  };
+});
 
 describe("OpenTelemetry tracing helpers", () => {
   const originalEnv = { ...process.env };
