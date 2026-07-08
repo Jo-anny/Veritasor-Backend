@@ -15,6 +15,7 @@
 
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
+import { z } from 'zod';
 import { validateBody, validateQuery } from '../middleware/validate.js';
 import { asyncErrorHandler } from '../middleware/errorHandler.js';
 import { createBusiness } from '../services/business/create.js';
@@ -24,9 +25,21 @@ import {
   createBusinessInputSchema,
   updateBusinessInputSchema,
   businessListQuerySchema,
-} from '../services/business/schemas.js';
+} from '../services/business/schemas.js'
+import type { WebhookSubscription } from '../services/webhooks/dispatcher.js';
+import crypto from 'node:crypto';
 
 const router = Router();
+export const webhookRouter = Router({ mergeParams: true });
+
+const webhookRegistrationSchema = z.object({
+  url: z.string().url(),
+  secret: z.string().min(32), // Mandate cryptographically strong secrets
+});
+
+// Mock database repository storage array layer
+// TODO: Replace with a persistent repository implementation
+const subscriptionsDb: WebhookSubscription[] = [];
 
 /**
  * POST /
@@ -134,5 +147,33 @@ router.get('/', validateQuery(businessListQuerySchema), asyncErrorHandler(listBu
  * @returns {error} 500 - Server error
  */
 router.get('/:id', asyncErrorHandler(getBusinessById));
+
+webhookRouter.post("/", requireAuth, validateBody(webhookRegistrationSchema), async (req, res) => {
+  try {
+    const businessId = req.params.id;
+    const validatedBody = webhookRegistrationSchema.parse(req.body);
+
+    // Limit bounded fan-out count capacity rules
+    const existingCount = subscriptionsDb.filter(sub => sub.businessId === businessId).length;
+    if (existingCount >= 5) {
+      return res.status(400).json({ error: "Maximum webhook endpoint subscription capacity reached." });
+    }
+
+    const newSubscription: WebhookSubscription = {
+      id: crypto.randomUUID(),
+      businessId,
+      url: validatedBody.url,
+      secret: validatedBody.secret,
+    };
+
+    subscriptionsDb.push(newSubscription);
+    return res.status(201).json(newSubscription);
+  } catch (err) {
+    // This will be caught by the asyncErrorHandler, but for clarity:
+    return res.status(400).json({ error: "Invalid registration payload context validation error." });
+  }
+});
+
+router.use('/:id/webhooks', webhookRouter);
 
 export default router;
