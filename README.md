@@ -229,6 +229,8 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/dbname npx tsx src/db/migrate
 
 Requires Node 18+ and a running PostgreSQL instance.
 
+**Rollback verification (CI):** `npm run migrate:verify-rollback` dry-runs apply-then-rollback for each migration against a disposable scratch database and reports any schema drift a `down.sql` leaves behind. It refuses to run against anything that doesn't look like a scratch DB — see [docs/migration-rollback-verification.md](docs/migration-rollback-verification.md).
+
 ## Environment
 
 Optional `.env`:
