@@ -17,6 +17,7 @@
     "docs:routes": "tsx scripts/generate-routes.ts",
     "docs:openapi": "tsx scripts/generate-openapi.ts",
     "audit:ci": "pnpm audit --prod --json | pnpm exec tsx scripts/check-audit.ts",
+    "verify:provenance": "tsx scripts/verify-provenance.ts",
     "rebuild:indexer": "tsx scripts/rebuild-indexer.ts"
   },
   "dependencies": {
