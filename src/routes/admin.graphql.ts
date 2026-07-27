@@ -1,10 +1,9 @@
 import { Router } from 'express';
-import { createYoga, createSchema, type YogaServerInstance } from 'graphql-yoga';
+import { createYoga, type YogaServerInstance } from 'graphql-yoga';
 import { GraphQLError, Kind, type DocumentNode, TypeInfo, visit, visitWithTypeInfo } from 'graphql';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requirePermissions } from '../middleware/permissions.js';
 import { IntegrationPermission } from '../types/permissions.js';
-import * as auditLogRepository from '../repositories/auditLogRepository.js';
 import * as businessRepository from '../repositories/business.js';
 import * as userRepository from '../repositories/userRepository.js';
 import { Counter } from 'prom-client';
@@ -12,6 +11,7 @@ import { metricsRegistry } from '../metrics.js';
 import { getRedisClient } from '../redis.js';
 import DataLoader from 'dataloader';
 import { attestationRepository } from '../repositories/attestation.js';
+import { gatewaySchema as schema } from '../graphql/gateway.js';
 
 const graphqlMutationRejections = new Counter({
   name: 'graphql_admin_mutation_rejections_total',
@@ -33,120 +33,7 @@ const graphqlCostExhaustionRejections = new Counter({
 
 const MAX_QUERY_DEPTH = 5;
 
-const typeDefs = `
-  scalar DateTime
-  scalar JSON
 
-  enum UserRole {
-    user
-    admin
-    business_admin
-  }
-
-  type User {
-    id: ID!
-    email: String!
-    role: UserRole!
-    createdAt: DateTime!
-    updatedAt: DateTime!
-    auditLogs: [AuditLog!]
-  }
-
-  type AuditLog {
-    id: ID!
-    userId: String!
-    action: String!
-    resource: String!
-    resourceId: String
-    metadata: JSON
-    timestamp: DateTime!
-    actor: User
-  }
-
-  type Business {
-    id: ID!
-    userId: String!
-    name: String!
-    email: String!
-    industry: String
-    description: String
-    website: String
-    reportingPeriod: String!
-    reportingTimezone: String!
-    lastReminderSentAt: String
-    createdAt: String!
-    updatedAt: String!
-    user: User
-    attestations: [Attestation!]
-  }
-
-  type Attestation {
-    id: ID!
-    businessId: String!
-    period: String!
-    attestedAt: String!
-    status: String
-    revokedAt: String
-    revokeReason: String
-  }
-
-  type Query {
-    users: [User!]!
-    user(id: ID!): User
-    auditLogs: [AuditLog!]!
-    auditLog(id: ID!): AuditLog
-    businesses: [Business!]!
-    business(id: ID!): Business
-  }
-`;
-
-const resolvers = {
-  Query: {
-    users: async () => {
-      const users = await userRepository.getAllUsers();
-      return users;
-    },
-    user: async (_: unknown, { id }: { id: string }) => {
-      return userRepository.findUserById(id);
-    },
-    auditLogs: async () => {
-      const result = await auditLogRepository.queryAuditLogs({ limit: 100 });
-      return result.data;
-    },
-    auditLog: async (_: unknown, { id }: { id: string }) => {
-      const logs = await auditLogRepository.getAllAuditLogs();
-      return logs.find(l => l.id === id) || null;
-    },
-    businesses: async () => {
-      return businessRepository.getAll();
-    },
-    business: async (_: unknown, { id }: { id: string }) => {
-      return businessRepository.getById(id);
-    },
-  },
-  User: {
-    auditLogs: async (user: { id: string }, _: any, context: any) => {
-      const result = await auditLogRepository.queryAuditLogs({
-        actorId: user.id,
-        limit: 50,
-      });
-      return result.data;
-    },
-  },
-  AuditLog: {
-    actor: async (auditLog: { userId: string }, _: any, context: any) => {
-      return context.loaders.userLoader.load(auditLog.userId);
-    },
-  },
-  Business: {
-    user: async (business: { userId: string }, _: any, context: any) => {
-      return context.loaders.userLoader.load(business.userId);
-    },
-    attestations: async (business: { id: string }, _: any, context: any) => {
-      return context.loaders.attestationsByBusinessLoader.load(business.id);
-    },
-  },
-};
 
 export function createDataLoaders() {
   return {
@@ -162,7 +49,7 @@ export function createDataLoaders() {
   };
 }
 
-const schema = createSchema({ typeDefs, resolvers });
+
 
 function getOperationDepth(document: DocumentNode): number {
   let maxDepth = 0;
@@ -188,20 +75,27 @@ function getOperationDepth(document: DocumentNode): number {
 }
 
 function getOperationCost(document: DocumentNode): number {
-  const typeInfo = new TypeInfo(schema);
   let cost = 0;
-  visit(
-    document,
-    visitWithTypeInfo(typeInfo, {
-      Field(node) {
+  const walk = (selections: readonly any[]) => {
+    for (const selection of selections) {
+      if (selection.kind === Kind.FIELD) {
         cost += 1;
-        const type = typeInfo.getType();
-        if (type && type.toString().startsWith('[')) {
-          cost += 2; // lists cost more
+        if (selection.selectionSet) {
+          cost += 2;
+          walk(selection.selectionSet.selections);
         }
-      },
-    })
-  );
+      } else if (selection.kind === Kind.INLINE_FRAGMENT || selection.kind === Kind.FRAGMENT_SPREAD) {
+        if (selection.selectionSet) {
+          walk(selection.selectionSet.selections);
+        }
+      }
+    }
+  };
+  for (const definition of document.definitions) {
+    if (definition.kind === Kind.OPERATION_DEFINITION && definition.operation === 'query') {
+      walk(definition.selectionSet.selections);
+    }
+  }
   return cost;
 }
 
@@ -214,7 +108,7 @@ class TokenBucketStore {
       const client = getRedisClient();
       const now = Date.now();
       const result = await (client as any).eval(
-        \`local key = KEYS[1]
+        `local key = KEYS[1]
          local tokensToConsume = tonumber(ARGV[1])
          local maxTokens = tonumber(ARGV[2])
          local refillRate = tonumber(ARGV[3])
@@ -244,7 +138,7 @@ class TokenBucketStore {
            return {1, tokens}
          else
            return {0, tokens}
-         end\`,
+          end`,
         1,
         key,
         tokensToConsume,
@@ -288,7 +182,7 @@ export function createAdminGraphqlYoga(): YogaServerInstance<{}, {}> {
                   graphqlDepthLimitRejections.inc();
                   setResult([
                     new GraphQLError(
-                      \`Query depth exceeds maximum allowed depth of \${MAX_QUERY_DEPTH}\`,
+                      `Query depth exceeds maximum allowed depth of ${MAX_QUERY_DEPTH}`,
                     ),
                   ]);
                   return;
@@ -303,7 +197,7 @@ export function createAdminGraphqlYoga(): YogaServerInstance<{}, {}> {
           const req = (contextValue as any).req;
           const res = (contextValue as any).res;
           const userId = req?.user?.userId || 'anonymous';
-          const key = \`graphql-budget:{\${userId}}\`;
+          const key = `graphql-budget:{${userId}}`;
           
           const maxTokens = 1000;
           const refillRateMs = 1000 / 60000; // 1000 tokens per minute
@@ -318,7 +212,7 @@ export function createAdminGraphqlYoga(): YogaServerInstance<{}, {}> {
           if (!allowed) {
             graphqlCostExhaustionRejections.inc();
             setResultAndStop({
-              errors: [new GraphQLError(\`Query cost of \${cost} exceeds remaining budget of \${remaining}.\`)]
+              errors: [new GraphQLError(`Query cost of ${cost} exceeds remaining budget of ${remaining}.`)]
             });
             return;
           }
