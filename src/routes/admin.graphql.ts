@@ -10,6 +10,8 @@ import * as userRepository from '../repositories/userRepository.js';
 import { Counter } from 'prom-client';
 import { metricsRegistry } from '../metrics.js';
 import { getRedisClient } from '../redis.js';
+import DataLoader from 'dataloader';
+import { attestationRepository } from '../repositories/attestation.js';
 
 const graphqlMutationRejections = new Counter({
   name: 'graphql_admin_mutation_rejections_total',
@@ -74,6 +76,18 @@ const typeDefs = `
     lastReminderSentAt: String
     createdAt: String!
     updatedAt: String!
+    user: User
+    attestations: [Attestation!]
+  }
+
+  type Attestation {
+    id: ID!
+    businessId: String!
+    period: String!
+    attestedAt: String!
+    status: String
+    revokedAt: String
+    revokeReason: String
   }
 
   type Query {
@@ -111,7 +125,7 @@ const resolvers = {
     },
   },
   User: {
-    auditLogs: async (user: { id: string }) => {
+    auditLogs: async (user: { id: string }, _: any, context: any) => {
       const result = await auditLogRepository.queryAuditLogs({
         actorId: user.id,
         limit: 50,
@@ -120,11 +134,33 @@ const resolvers = {
     },
   },
   AuditLog: {
-    actor: async (auditLog: { userId: string }) => {
-      return userRepository.findUserById(auditLog.userId);
+    actor: async (auditLog: { userId: string }, _: any, context: any) => {
+      return context.loaders.userLoader.load(auditLog.userId);
+    },
+  },
+  Business: {
+    user: async (business: { userId: string }, _: any, context: any) => {
+      return context.loaders.userLoader.load(business.userId);
+    },
+    attestations: async (business: { id: string }, _: any, context: any) => {
+      return context.loaders.attestationsByBusinessLoader.load(business.id);
     },
   },
 };
+
+export function createDataLoaders() {
+  return {
+    userLoader: new DataLoader(async (ids: readonly string[]) => {
+      return userRepository.findUsersByIds(ids);
+    }),
+    businessLoader: new DataLoader(async (ids: readonly string[]) => {
+      return businessRepository.getByIds(ids);
+    }),
+    attestationsByBusinessLoader: new DataLoader(async (businessIds: readonly string[]) => {
+      return attestationRepository.listByBusinessIds(businessIds);
+    }),
+  };
+}
 
 const schema = createSchema({ typeDefs, resolvers });
 
@@ -229,6 +265,10 @@ export function createAdminGraphqlYoga(): YogaServerInstance<{}, {}> {
   return createYoga({
     schema,
     maskedErrors: true,
+    context: (req) => ({
+      ...req,
+      loaders: createDataLoaders(),
+    }),
     plugins: [
       {
         onValidate({ params, setResult }: { params: { documentAST: DocumentNode; rules: readonly any[]; schema: any; typeInfo: any; options: any }; setResult: (errors: readonly GraphQLError[]) => void }) {
