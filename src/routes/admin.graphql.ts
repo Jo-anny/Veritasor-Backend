@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { createYoga, createSchema, type YogaServerInstance } from 'graphql-yoga';
-import { GraphQLError, Kind, type DocumentNode } from 'graphql';
+import { GraphQLError, Kind, type DocumentNode, TypeInfo, visit, visitWithTypeInfo } from 'graphql';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requirePermissions } from '../middleware/permissions.js';
 import { IntegrationPermission } from '../types/permissions.js';
@@ -9,6 +9,7 @@ import * as businessRepository from '../repositories/business.js';
 import * as userRepository from '../repositories/userRepository.js';
 import { Counter } from 'prom-client';
 import { metricsRegistry } from '../metrics.js';
+import { getRedisClient } from '../redis.js';
 
 const graphqlMutationRejections = new Counter({
   name: 'graphql_admin_mutation_rejections_total',
@@ -19,6 +20,12 @@ const graphqlMutationRejections = new Counter({
 const graphqlDepthLimitRejections = new Counter({
   name: 'graphql_admin_depth_limit_rejections_total',
   help: 'Total number of queries rejected due to depth limit on admin GraphQL endpoint',
+  registers: [metricsRegistry],
+});
+
+const graphqlCostExhaustionRejections = new Counter({
+  name: 'graphql_admin_cost_exhaustion_rejections_total',
+  help: 'Total number of queries rejected due to cost budget exhaustion on admin GraphQL endpoint',
   registers: [metricsRegistry],
 });
 
@@ -144,6 +151,80 @@ function getOperationDepth(document: DocumentNode): number {
   return maxDepth;
 }
 
+function getOperationCost(document: DocumentNode): number {
+  const typeInfo = new TypeInfo(schema);
+  let cost = 0;
+  visit(
+    document,
+    visitWithTypeInfo(typeInfo, {
+      Field(node) {
+        cost += 1;
+        const type = typeInfo.getType();
+        if (type && type.toString().startsWith('[')) {
+          cost += 2; // lists cost more
+        }
+      },
+    })
+  );
+  return cost;
+}
+
+class TokenBucketStore {
+  async consume(key: string, tokensToConsume: number, maxTokens: number, refillRateMs: number): Promise<{ allowed: boolean; remaining: number }> {
+    try {
+      if (!process.env.REDIS_URL && !process.env.REDIS_CLUSTER_NODES) {
+        return { allowed: true, remaining: maxTokens };
+      }
+      const client = getRedisClient();
+      const now = Date.now();
+      const result = await (client as any).eval(
+        \`local key = KEYS[1]
+         local tokensToConsume = tonumber(ARGV[1])
+         local maxTokens = tonumber(ARGV[2])
+         local refillRate = tonumber(ARGV[3])
+         local now = tonumber(ARGV[4])
+         
+         local bucket = redis.call('HMGET', key, 'tokens', 'lastRefill')
+         local tokens = tonumber(bucket[1])
+         local lastRefill = tonumber(bucket[2])
+         
+         if not tokens then
+           tokens = maxTokens
+           lastRefill = now
+         else
+           local timePassed = math.max(0, now - lastRefill)
+           local newTokens = math.floor(timePassed * refillRate)
+           tokens = math.min(maxTokens, tokens + newTokens)
+           if newTokens > 0 then
+             lastRefill = lastRefill + (newTokens / refillRate)
+           end
+         end
+         
+         if tokens >= tokensToConsume then
+           tokens = tokens - tokensToConsume
+           redis.call('HMSET', key, 'tokens', tokens, 'lastRefill', lastRefill)
+           local timeToMax = math.ceil((maxTokens - tokens) / refillRate)
+           redis.call('PEXPIRE', key, timeToMax)
+           return {1, tokens}
+         else
+           return {0, tokens}
+         end\`,
+        1,
+        key,
+        tokensToConsume,
+        maxTokens,
+        refillRateMs,
+        now
+      );
+      return { allowed: result[0] === 1, remaining: result[1] };
+    } catch (error) {
+      return { allowed: true, remaining: maxTokens };
+    }
+  }
+}
+
+const tokenBucketStore = new TokenBucketStore();
+
 export function createAdminGraphqlYoga(): YogaServerInstance<{}, {}> {
   return createYoga({
     schema,
@@ -167,7 +248,7 @@ export function createAdminGraphqlYoga(): YogaServerInstance<{}, {}> {
                   graphqlDepthLimitRejections.inc();
                   setResult([
                     new GraphQLError(
-                      `Query depth exceeds maximum allowed depth of ${MAX_QUERY_DEPTH}`,
+                      \`Query depth exceeds maximum allowed depth of \${MAX_QUERY_DEPTH}\`,
                     ),
                   ]);
                   return;
@@ -176,6 +257,32 @@ export function createAdminGraphqlYoga(): YogaServerInstance<{}, {}> {
             }
           }
         },
+        async onExecute({ args, setResultAndStop }) {
+          const { document, contextValue } = args;
+          const cost = getOperationCost(document);
+          const req = (contextValue as any).req;
+          const res = (contextValue as any).res;
+          const userId = req?.user?.userId || 'anonymous';
+          const key = \`graphql-budget:{\${userId}}\`;
+          
+          const maxTokens = 1000;
+          const refillRateMs = 1000 / 60000; // 1000 tokens per minute
+          
+          const { allowed, remaining } = await tokenBucketStore.consume(key, cost, maxTokens, refillRateMs);
+          
+          if (res && res.setHeader) {
+            res.setHeader('X-GraphQL-Cost', cost.toString());
+            res.setHeader('X-GraphQL-Budget-Remaining', remaining.toString());
+          }
+          
+          if (!allowed) {
+            graphqlCostExhaustionRejections.inc();
+            setResultAndStop({
+              errors: [new GraphQLError(\`Query cost of \${cost} exceeds remaining budget of \${remaining}.\`)]
+            });
+            return;
+          }
+        }
       },
     ],
   });
