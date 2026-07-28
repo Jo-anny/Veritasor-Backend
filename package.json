@@ -17,7 +17,8 @@
     "docs:routes": "tsx scripts/generate-routes.ts",
     "docs:openapi": "tsx scripts/generate-openapi.ts",
     "audit:ci": "pnpm audit --prod --json | pnpm exec tsx scripts/check-audit.ts",
-    "rebuild:indexer": "tsx scripts/rebuild-indexer.ts"
+    "rebuild:indexer": "tsx scripts/rebuild-indexer.ts",
+    "pact:can-i-deploy": "tsx scripts/can-i-deploy.ts"
   },
   "dependencies": {
     "@openfeature/server-sdk": "^1.22.0",
