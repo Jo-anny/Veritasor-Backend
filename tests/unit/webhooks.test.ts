@@ -112,4 +112,15 @@ describe("Business Fan-out Webhooks Dispatch Verification Matrix", () => {
     expect(restoredBreaker.getState()).toBe(WebhookCircuitBreakerState.OPEN);
     expect(restoredBreaker.canAttempt()).toBe(false);
   });
+
+  it("rejects payload exceeding maxPayloadSize and logs to audit", () => {
+    // stringified mockEvent: '{"event":"attestation.created","root":"0xhash"}' -> 47 bytes
+    const subCap46 = { ...mockSubscription, maxPayloadSize: 46 };
+    expect(() => signAndPrepareDelivery(mockEvent, subCap46, 1)).toThrowError("exceeds maximum allowed size");
+  });
+
+  it("accepts payload exactly matching maxPayloadSize boundary", () => {
+    const subCap47 = { ...mockSubscription, maxPayloadSize: 47 };
+    expect(() => signAndPrepareDelivery(mockEvent, subCap47, 1)).not.toThrow();
+  });
 });
