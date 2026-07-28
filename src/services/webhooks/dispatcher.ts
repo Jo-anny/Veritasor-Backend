@@ -1,22 +1,27 @@
 import crypto from "crypto";
 import { staleWebhookDeliveries } from "../../metrics.js";
 
+export type WebhookAlgorithm = "hmac-sha256" | "ed25519";
+
 export interface WebhookSubscription {
   id: string;
   businessId: string;
   url: string;
   secret: string;
+  algo?: WebhookAlgorithm | string;
 }
 
 export interface WebhookDeliveryReceipt {
   delivery_id: string;
   attempt: number;
   signature: string;
+  algo: string;
   timestamp: string;
 }
 
 /**
- * Signs the outbound payload and constructs a verifiable delivery receipt
+ * Signs the outbound payload and constructs a verifiable delivery receipt.
+ * Supports algorithm negotiation (HMAC-SHA256 and Ed25519) per subscription.
  */
 export function signAndPrepareDelivery(
   payload: object,
@@ -39,6 +44,7 @@ export function signAndPrepareDelivery(
     "X-Veritasor-Attempt": attempt.toString(),
     "X-Veritasor-Timestamp": timestamp,
     "X-Veritasor-Signature": signature,
+    "X-Veritasor-Signature-Alg": normalizedAlgo,
   };
 
   const receipt: WebhookDeliveryReceipt = {
