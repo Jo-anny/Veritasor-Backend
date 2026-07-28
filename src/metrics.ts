@@ -92,9 +92,8 @@ export const idempotencySweepRunsTotal = new Counter({
   registers: [metricsRegistry],
 });
 
-export const idempotencyBatchSize = new Histogram({
-  name: "idempotency_batch_size",
-  help: "Size of idempotency lookup batches",
-  buckets: [1, 5, 10, 20, 50, 100],
+export const staleWebhookDeliveries = new Counter({
+  name: "webhook_delivery_stale_total",
+  help: "Total number of webhook deliveries rejected due to stale timestamp",
   registers: [metricsRegistry],
 });
