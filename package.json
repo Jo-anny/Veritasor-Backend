@@ -19,7 +19,7 @@
     "docs:openapi": "tsx scripts/generate-openapi.ts",
     "audit:ci": "pnpm audit --prod --json | pnpm exec tsx scripts/check-audit.ts",
     "rebuild:indexer": "tsx scripts/rebuild-indexer.ts",
-    "pact:publish": "tsx scripts/publish-pact.ts"
+    "pact:can-i-deploy": "tsx scripts/can-i-deploy.ts"
   },
   "dependencies": {
     "@graphql-tools/schema": "^10.0.38",
