@@ -39,7 +39,7 @@ export class SecretLoadError extends SecretLoaderError {
   }
 }
 
-export type SecretProvider = 'env' | 'aws' | 'vault'
+export type SecretProvider = 'env' | 'aws' | 'vault' | 'gsm'
 
 export interface SecretLoaderOptions {
   provider?: SecretProvider
@@ -50,6 +50,7 @@ export interface SecretLoaderOptions {
   vaultBaseUrl?: string
   vaultSecretPath?: string
   vaultToken?: string
+  gcpProjectId?: string
 }
 
 abstract class BaseSecretAdapter implements SecretAdapter {
@@ -431,6 +432,42 @@ export class AwsSecretsAdapter extends BaseSecretAdapter {
   }
 }
 
+export class GsmSecretAdapter extends BaseSecretAdapter {
+  private client: { accessSecretVersion: (params: { name: string }) => Promise<[{ payload?: { data?: Buffer } }]> } | null = null
+
+  constructor(private readonly projectId: string) {
+    super()
+  }
+
+  async reload(): Promise<void> {
+    this.loaded = true
+  }
+
+  async get(key: string): Promise<string> {
+    this.ensureLoaded()
+    try {
+      const client = await this.getClient()
+      const name = `projects/${this.projectId}/secrets/${key}/versions/latest`
+      const [version] = await client.accessSecretVersion({ name })
+      const payload = version.payload?.data?.toString('utf8')
+      return this.toSecretValue(payload, key)
+    } catch (error) {
+      throw new SecretLoadError(
+        `Failed to fetch secret from Google Secret Manager: ${key}`,
+        error instanceof Error ? error : undefined,
+      )
+    }
+  }
+
+  private async getClient(): Promise<{ accessSecretVersion: (params: { name: string }) => Promise<[{ payload?: { data?: Buffer } }]> }> {
+    if (!this.client) {
+      const { SecretManagerServiceClient } = await import('@google-cloud/secret-manager')
+      this.client = new SecretManagerServiceClient()
+    }
+    return this.client
+  }
+}
+
 class FailoverSecretLoader implements SecretAdapter {
   private primaryAdapter: SecretAdapter
   private fallbackAdapter: SecretAdapter
@@ -499,6 +536,14 @@ export function createSecretLoader(options: SecretLoaderOptions = {}): SecretAda
         throw new SecretLoadError('VAULT_SECRET_PATH is required when SECRET_PROVIDER=vault')
       }
       primaryAdapter = new VaultAdapter(baseUrl, secretPath, token)
+      break
+    }
+    case 'gsm': {
+      const projectId = options.gcpProjectId ?? process.env.GCP_PROJECT_ID
+      if (!projectId) {
+        throw new SecretLoadError('GCP_PROJECT_ID is required when SECRET_PROVIDER=gsm')
+      }
+      primaryAdapter = new GsmSecretAdapter(projectId)
       break
     }
     default:
