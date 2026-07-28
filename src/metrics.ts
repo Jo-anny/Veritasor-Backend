@@ -37,6 +37,14 @@ export const rateLimitRejections = new Counter({
   registers: [metricsRegistry],
 });
 
+export const redisClusterRedirectionsTotal = new Counter({
+  name: "redis_cluster_redirections_total",
+  help: "Total number of Redis Cluster MOVED/ASK redirections handled in rateLimiter",
+  labelNames: ["type", "store"] as const,
+  registers: [metricsRegistry],
+});
+
+
 export const sorobanRetryTotal = new Counter({
   name: "soroban_retry_total",
   help: "Total number of Soroban RPC retry attempts",
@@ -162,5 +170,59 @@ export const pgbouncerTotalQueryTimeSecondsTotal = new Counter({
   name: "pgbouncer_total_query_time_seconds_total",
   help: "Cumulative query execution time in seconds",
   labelNames: ["database"] as const,
+  registers: [metricsRegistry],
+});
+
+/**
+ * Adaptive batch-size tuning metrics for Soroban submissions.
+ *
+ * - `soroban_adaptive_batch_size` (gauge): current batch size after tuning.
+ * - `soroban_fee_ewma` (gauge): EWMA-smoothed Soroban inclusion fee (p50 stroops).
+ * - `soroban_current_fee` (gauge): latest raw p50 fee (stroops).
+ * - `soroban_fee_volatility` (gauge): fee coefficient of variation (p90-p10)/p50.
+ * - `soroban_fee_spike_protection_activations_total` (counter): spike-protection events.
+ */
+export const sorobanAdaptiveBatchSize = new Gauge({
+  name: "soroban_adaptive_batch_size",
+  help: "Current adaptive batch size for Soroban submissions, tuned by fee volatility",
+  registers: [metricsRegistry],
+});
+
+export const sorobanFeeEwma = new Gauge({
+  name: "soroban_fee_ewma",
+  help: "EWMA-smoothed Soroban network inclusion fee in stroops",
+  registers: [metricsRegistry],
+});
+
+export const sorobanCurrentFee = new Gauge({
+  name: "soroban_current_fee",
+  help: "Latest observed Soroban inclusion fee p50 in stroops",
+  registers: [metricsRegistry],
+});
+
+export const sorobanFeeVolatility = new Gauge({
+  name: "soroban_fee_volatility",
+  help: "Soroban fee coefficient of variation (p90-p10)/p50",
+  registers: [metricsRegistry],
+});
+
+export const sorobanFeeSpikeProtectionsTotal = new Counter({
+  name: "soroban_fee_spike_protection_activations_total",
+  help: "Total number of Soroban fee spike protection activations that reduced batch size to minimum",
+  registers: [metricsRegistry],
+});
+
+export const webhookRetryAttempts = new Histogram({
+  name: "webhook_retry_attempts",
+  help: "Number of retry attempts made when processing a webhook event",
+  labelNames: ["provider"] as const,
+  buckets: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  registers: [metricsRegistry],
+});
+
+export const webhookRetryExhaustedTotal = new Counter({
+  name: "webhook_retry_exhausted_total",
+  help: "Total number of webhook events that exhausted all retry attempts and were sent to DLQ",
+  labelNames: ["provider"] as const,
   registers: [metricsRegistry],
 });
