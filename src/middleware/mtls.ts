@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { config } from "../config/index.js";
-import { extractSpiffeIdFromCert } from "../spiffe/spiffeId.js";
+import { mtlsRevocationChecker } from "./mtlsRevocation.js";
 import { logger } from "../utils/logger.js";
 
 export interface MtlsAuthenticatedRequest extends Request {
@@ -22,6 +22,24 @@ export function mtlsMiddleware(
   res: Response,
   next: NextFunction,
 ): void {
+  void handleMtls(req, res, next).catch((error) => {
+    logger.error({
+      event: "mtls_internal_error",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(503).json({
+      status: "error",
+      code: "MTLS_INTERNAL_ERROR",
+      message: "mTLS verification failed unexpectedly",
+    });
+  });
+}
+
+async function handleMtls(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
   if (!config.mtls.enabled) {
     return next();
   }
@@ -40,42 +58,31 @@ export function mtlsMiddleware(
     });
   }
 
-  const authenticated = req as MtlsAuthenticatedRequest;
-
-  if (config.mtls.spiffe.enabled) {
-    const spiffeId = extractSpiffeIdFromCert(cert, config.mtls.spiffe.trustDomain);
-    if (!spiffeId) {
-      logger.warn({
-        event: "mtls_spiffe_id_missing",
-        trust_domain: config.mtls.spiffe.trustDomain,
-      });
-      return res.status(403).json({
-        status: "error",
-        code: "MTLS_SPIFFE_ID_INVALID",
-        message: "Client certificate must contain a valid SPIFFE ID",
-      });
-    }
-
-    if (
-      config.mtls.spiffeIdAllowlist.length > 0
-      && !config.mtls.spiffeIdAllowlist.includes(spiffeId)
-    ) {
-      logger.warn({
-        event: "mtls_spiffe_id_not_allowed",
-        client_spiffe_id: spiffeId,
-        allowlist: config.mtls.spiffeIdAllowlist,
-      });
-      return res.status(403).json({
-        status: "error",
-        code: "MTLS_SPIFFE_ID_NOT_ALLOWED",
-        message: "Client SPIFFE ID not allowed",
-      });
-    }
-
-    authenticated.clientSpiffeId = spiffeId;
-    return next();
+  const revocationDecision = await mtlsRevocationChecker.verifyClientCertificate(
+    req.socket,
+    cert,
+  );
+  if (!revocationDecision.ok) {
+    logger.warn({
+      event: "mtls_certificate_revocation_rejected",
+      source: revocationDecision.source,
+      status: revocationDecision.status,
+      detail: revocationDecision.detail,
+    });
+    return res.status(403).json({
+      status: "error",
+      code:
+        revocationDecision.status === "revoked"
+          ? "MTLS_CERT_REVOKED"
+          : "MTLS_REVOCATION_CHECK_FAILED",
+      message:
+        revocationDecision.status === "revoked"
+          ? "Client certificate has been revoked"
+          : "Client certificate revocation status could not be validated",
+    });
   }
 
+  // Check if CN is in allowlist (if allowlist is not empty)
   const cn = cert.subject?.CN;
   if (config.mtls.cnAllowlist.length > 0) {
     if (!cn || !config.mtls.cnAllowlist.includes(cn)) {

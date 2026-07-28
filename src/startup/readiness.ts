@@ -131,8 +131,8 @@ export async function runStartupDependencyReadinessChecks(): Promise<StartupRead
 /**
  * Validate mTLS configuration.
  *
- * When MTLS_SPIFFE_ENABLED=true requires SPIFFE_TRUST_DOMAIN and the Workload
- * API socket address. Otherwise static MTLS_* paths are required.
+ * If MTLS_ENABLED=true requires MTLS_CA_PATH, MTLS_CERT_PATH, and MTLS_KEY_PATH.
+ * If MTLS_OCSP_ENABLED=true also requires MTLS_CRL_PATH for fallback revocation checks.
  */
 function checkMtlsConfig(_isProduction: boolean): DependencyReadinessResult {
   const mtlsEnabled = process.env.MTLS_ENABLED?.trim().toLowerCase() === "true";
@@ -156,15 +156,16 @@ function checkMtlsConfig(_isProduction: boolean): DependencyReadinessResult {
       };
     }
 
-    if (!workloadSocket.startsWith("unix:")) {
+    const ocspEnabled = process.env.MTLS_OCSP_ENABLED?.trim().toLowerCase() === "true"
+    const crlPath = process.env.MTLS_CRL_PATH?.trim()
+
+    if (ocspEnabled && !crlPath) {
       return {
         dependency: "config/mtls",
         ready: false,
-        reason: "SPIFFE_WORKLOAD_API_SOCKET must reference a unix domain socket",
-      };
+        reason: "MTLS_CRL_PATH must be set when MTLS_OCSP_ENABLED=true",
+      }
     }
-
-    return { dependency: "config/mtls", ready: true };
   }
 
   const caPath = process.env.MTLS_CA_PATH?.trim();

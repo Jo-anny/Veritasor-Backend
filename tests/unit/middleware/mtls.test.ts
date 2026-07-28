@@ -7,12 +7,20 @@ vi.mock("../../../src/config/index.js", () => ({
     mtls: {
       enabled: true,
       cnAllowlist: [],
-      spiffeIdAllowlist: [],
-      spiffe: {
-        enabled: false,
-        trustDomain: "example.org",
+      revocation: {
+        enabled: true,
       },
     },
+  },
+}));
+
+const { verifyClientCertificate } = vi.hoisted(() => ({
+  verifyClientCertificate: vi.fn(),
+}));
+
+vi.mock("../../../src/middleware/mtlsRevocation.js", () => ({
+  mtlsRevocationChecker: {
+    verifyClientCertificate,
   },
 }));
 
@@ -54,11 +62,22 @@ function createMockResponse() {
   return response as Response & { statusCode: number; body: unknown };
 }
 
+async function flushMiddleware(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("mtlsMiddleware", () => {
   const next = vi.fn() as NextFunction;
 
   beforeEach(() => {
     next.mockReset();
+    verifyClientCertificate.mockReset();
+    verifyClientCertificate.mockResolvedValue({
+      ok: true,
+      status: "good",
+      source: "ocsp",
+    });
   });
 
   it("passes through when mTLS is disabled", async () => {
@@ -68,99 +87,92 @@ describe("mtlsMiddleware", () => {
     const req = createMockRequest({ cert: null, authorized: false });
     const res = createMockResponse();
     mtlsMiddleware(req, res, next);
+    await flushMiddleware();
 
     expect(next).toHaveBeenCalledOnce();
     expect(res.statusCode).toBe(200);
+    expect(verifyClientCertificate).not.toHaveBeenCalled();
 
     (config as { mtls: { enabled: boolean } }).mtls.enabled = true;
   });
 
-  it("rejects requests without an authorized client certificate", () => {
+  it("rejects requests without an authorized client certificate", async () => {
     const req = createMockRequest({ authorized: false, cert: null });
     const res = createMockResponse();
 
     mtlsMiddleware(req, res, next);
+    await flushMiddleware();
 
     expect(res.statusCode).toBe(495);
     expect(res.body).toMatchObject({ code: "MTLS_UNAUTHORIZED" });
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("validates SPIFFE IDs when SPIFFE mode is enabled", async () => {
-    const { config } = await import("../../../src/config/index.js");
-    (config as {
-      mtls: {
-        spiffe: { enabled: boolean };
-        spiffeIdAllowlist: string[];
-      };
-    }).mtls.spiffe.enabled = true;
-    (config as { mtls: { spiffeIdAllowlist: string[] } }).mtls.spiffeIdAllowlist = [
-      "spiffe://example.org/api",
-    ];
+  it("rejects revoked client certificates", async () => {
+    verifyClientCertificate.mockResolvedValueOnce({
+      ok: false,
+      status: "revoked",
+      source: "ocsp",
+      detail: "revoked by responder",
+    });
 
     const req = createMockRequest({
       cert: {
-        subjectaltname: "URI:spiffe://example.org/api",
+        subject: { CN: "trusted-client" },
+        raw: Buffer.from("cert"),
       },
     });
     const res = createMockResponse();
 
     mtlsMiddleware(req, res, next);
-
-    expect(next).toHaveBeenCalledOnce();
-    expect((req as { clientSpiffeId?: string }).clientSpiffeId).toBe(
-      "spiffe://example.org/api",
-    );
-
-    (config as { mtls: { spiffe: { enabled: boolean } } }).mtls.spiffe.enabled = false;
-    (config as { mtls: { spiffeIdAllowlist: string[] } }).mtls.spiffeIdAllowlist = [];
-  });
-
-  it("rejects SPIFFE IDs that are not on the allowlist", async () => {
-    const { config } = await import("../../../src/config/index.js");
-    (config as {
-      mtls: {
-        spiffe: { enabled: boolean };
-        spiffeIdAllowlist: string[];
-      };
-    }).mtls.spiffe.enabled = true;
-    (config as { mtls: { spiffeIdAllowlist: string[] } }).mtls.spiffeIdAllowlist = [
-      "spiffe://example.org/allowed",
-    ];
-
-    const req = createMockRequest({
-      cert: {
-        subjectaltname: "URI:spiffe://example.org/other",
-      },
-    });
-    const res = createMockResponse();
-
-    mtlsMiddleware(req, res, next);
+    await flushMiddleware();
 
     expect(res.statusCode).toBe(403);
-    expect(res.body).toMatchObject({ code: "MTLS_SPIFFE_ID_NOT_ALLOWED" });
-
-    (config as { mtls: { spiffe: { enabled: boolean } } }).mtls.spiffe.enabled = false;
-    (config as { mtls: { spiffeIdAllowlist: string[] } }).mtls.spiffeIdAllowlist = [];
+    expect(res.body).toMatchObject({ code: "MTLS_CERT_REVOKED" });
+    expect(next).not.toHaveBeenCalled();
   });
 
-  it("rejects client certificates without a SPIFFE ID in the trust domain", async () => {
-    const { config } = await import("../../../src/config/index.js");
-    (config as { mtls: { spiffe: { enabled: boolean } } }).mtls.spiffe.enabled = true;
+  it("rejects when revocation status cannot be validated", async () => {
+    verifyClientCertificate.mockResolvedValueOnce({
+      ok: false,
+      status: "stale_ocsp",
+      source: "ocsp",
+      detail: "stale",
+    });
 
     const req = createMockRequest({
       cert: {
-        subjectaltname: "DNS:legacy-client",
+        subject: { CN: "trusted-client" },
+        raw: Buffer.from("cert"),
       },
     });
     const res = createMockResponse();
 
     mtlsMiddleware(req, res, next);
+    await flushMiddleware();
 
     expect(res.statusCode).toBe(403);
-    expect(res.body).toMatchObject({ code: "MTLS_SPIFFE_ID_INVALID" });
+    expect(res.body).toMatchObject({ code: "MTLS_REVOCATION_CHECK_FAILED" });
+    expect(next).not.toHaveBeenCalled();
+  });
 
-    (config as { mtls: { spiffe: { enabled: boolean } } }).mtls.spiffe.enabled = false;
+  it("returns 503 when revocation verification throws unexpectedly", async () => {
+    verifyClientCertificate.mockRejectedValueOnce(new Error("openssl crashed"));
+
+    const req = createMockRequest({
+      cert: {
+        subject: { CN: "trusted-client" },
+        raw: Buffer.from("cert"),
+      },
+    });
+    const res = createMockResponse();
+
+    mtlsMiddleware(req, res, next);
+    await flushMiddleware();
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toMatchObject({ code: "MTLS_INTERNAL_ERROR" });
+    expect(next).not.toHaveBeenCalled();
   });
 
   it("rejects legacy CN values that are not on the allowlist", async () => {
@@ -170,11 +182,13 @@ describe("mtlsMiddleware", () => {
     const req = createMockRequest({
       cert: {
         subject: { CN: "untrusted-client" },
+        raw: Buffer.from("cert"),
       },
     });
     const res = createMockResponse();
 
     mtlsMiddleware(req, res, next);
+    await flushMiddleware();
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toMatchObject({ code: "MTLS_CN_NOT_ALLOWED" });
@@ -182,18 +196,20 @@ describe("mtlsMiddleware", () => {
     (config as { mtls: { cnAllowlist: string[] } }).mtls.cnAllowlist = [];
   });
 
-  it("accepts legacy CN allowlist matches when SPIFFE mode is disabled", async () => {
+  it("accepts legacy CN allowlist matches when revocation is good", async () => {
     const { config } = await import("../../../src/config/index.js");
     (config as { mtls: { cnAllowlist: string[] } }).mtls.cnAllowlist = ["trusted-client"];
 
     const req = createMockRequest({
       cert: {
         subject: { CN: "trusted-client" },
+        raw: Buffer.from("cert"),
       },
     });
     const res = createMockResponse();
 
     mtlsMiddleware(req, res, next);
+    await flushMiddleware();
 
     expect(next).toHaveBeenCalledOnce();
     expect((req as { clientCN?: string }).clientCN).toBe("trusted-client");

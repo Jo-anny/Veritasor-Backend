@@ -6,7 +6,8 @@ vi.mock("../../../src/db/client.js", () => ({
   pool: { query: mockQuery },
 }));
 
-const { checkDatabase, sanitiseDbError, runStartupDependencyReadinessChecks } = await import(
+// Import after mocks are set up
+const { checkDatabase, runStartupDependencyReadinessChecks, sanitiseDbError } = await import(
   "../../../src/startup/readiness.js"
 );
 
@@ -78,22 +79,28 @@ describe("runStartupDependencyReadinessChecks mTLS", () => {
     process.env = { ...originalEnv };
   });
 
-  it("requires SPIFFE trust domain when SPIFFE mTLS is enabled", async () => {
+  it("requires a CRL path when OCSP verification is enabled", async () => {
     process.env.MTLS_ENABLED = "true";
-    process.env.MTLS_SPIFFE_ENABLED = "true";
-    delete process.env.SPIFFE_TRUST_DOMAIN;
+    process.env.MTLS_CA_PATH = "/tmp/ca.pem";
+    process.env.MTLS_CERT_PATH = "/tmp/server-cert.pem";
+    process.env.MTLS_KEY_PATH = "/tmp/server-key.pem";
+    process.env.MTLS_OCSP_ENABLED = "true";
+    delete process.env.MTLS_CRL_PATH;
 
     const report = await runStartupDependencyReadinessChecks();
     const mtlsCheck = report.checks.find((check) => check.dependency === "config/mtls");
 
     expect(mtlsCheck?.ready).toBe(false);
-    expect(mtlsCheck?.reason).toMatch(/SPIFFE_TRUST_DOMAIN/);
+    expect(mtlsCheck?.reason).toMatch(/MTLS_CRL_PATH/);
   });
 
-  it("accepts SPIFFE mTLS configuration with trust domain and unix socket", async () => {
+  it("accepts OCSP configuration when the CRL fallback is configured", async () => {
     process.env.MTLS_ENABLED = "true";
-    process.env.MTLS_SPIFFE_ENABLED = "true";
-    process.env.SPIFFE_TRUST_DOMAIN = "example.org";
+    process.env.MTLS_CA_PATH = "/tmp/ca.pem";
+    process.env.MTLS_CERT_PATH = "/tmp/server-cert.pem";
+    process.env.MTLS_KEY_PATH = "/tmp/server-key.pem";
+    process.env.MTLS_OCSP_ENABLED = "true";
+    process.env.MTLS_CRL_PATH = "/tmp/clients.crl";
 
     const report = await runStartupDependencyReadinessChecks();
     const mtlsCheck = report.checks.find((check) => check.dependency === "config/mtls");
