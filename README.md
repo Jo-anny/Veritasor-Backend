@@ -120,6 +120,12 @@ Run the security tests in isolation:
 npx vitest run tests/security/multitenant.fuzz.spec.ts
 ```
 
+Pact contracts are published to the broker from the main-branch security workflow using the `PACT_BROKER_URL` secret and the current commit SHA as the consumer version. To publish locally, run:
+
+```bash
+npm run pact:publish
+```
+
 **What is fuzz-tested:**
 
 | Scenario | Property | Expected outcome |
