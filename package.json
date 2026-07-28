@@ -19,6 +19,7 @@
     "migrate:verify-rollback": "tsx src/db/migrate.ts verify-rollback",
     "docs:routes": "tsx scripts/generate-routes.ts",
     "docs:openapi": "tsx scripts/generate-openapi.ts",
+    "sbom:generate": "tsx scripts/generate-sbom.ts",
     "audit:ci": "pnpm audit --prod --json | pnpm exec tsx scripts/check-audit.ts",
     "rebuild:indexer": "tsx scripts/rebuild-indexer.ts",
     "pact:can-i-deploy": "tsx scripts/can-i-deploy.ts"
