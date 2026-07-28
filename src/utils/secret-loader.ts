@@ -1,22 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import dotenv from 'dotenv'
-import {
-  vaultLeaseRenewalDurationSeconds,
-  vaultLeaseRenewalTotal,
-  vaultLeaseSecondsRemaining,
-} from '../metrics.js'
-
-/** Fraction of the lease duration at which renewal is attempted (70%). */
-const LEASE_RENEWAL_THRESHOLD_RATIO = 0.7
-/**
- * Random jitter applied to the renewal delay, as a fraction of the base
- * delay (±10%), so that many instances sharing similar lease timing don't
- * all renew in the same instant (thundering herd).
- */
-const LEASE_RENEWAL_JITTER_RATIO = 0.1
-/** Retry delay after a renewal *request* failure (not a denial). */
-const LEASE_RENEWAL_ERROR_RETRY_MS = 30_000
+import { logger } from './logger.js'
 
 export interface SecretAdapter {
   get(key: string): Promise<string>
@@ -61,6 +46,7 @@ export interface SecretLoaderOptions {
   timeout?: number
   fallbackEnabled?: boolean
   awsRegion?: string
+  awsSecondaryRegion?: string
   vaultBaseUrl?: string
   vaultSecretPath?: string
   vaultToken?: string
@@ -355,7 +341,10 @@ export class VaultAdapter extends BaseSecretAdapter {
 }
 
 export class AwsSecretsAdapter extends BaseSecretAdapter {
-  constructor(private readonly region: string) {
+  constructor(
+    private readonly primaryRegion: string,
+    private readonly secondaryRegion?: string,
+  ) {
     super()
   }
 
@@ -365,27 +354,80 @@ export class AwsSecretsAdapter extends BaseSecretAdapter {
 
   async get(key: string): Promise<string> {
     this.ensureLoaded()
-    try {
-      const { SecretsManagerClient, GetSecretValueCommand } = await import('@aws-sdk/client-secrets-manager')
-      const client = new SecretsManagerClient({ region: this.region })
-      const command = new GetSecretValueCommand({ SecretId: key })
-      const response = await client.send(command)
-      
-      if (response.SecretString) {
-        try {
-          const parsed = JSON.parse(response.SecretString)
-          if (parsed && typeof parsed === 'object') {
-            this.secrets = BaseSecretAdapter.normalizeSecretValues(parsed)
-            return this.toSecretValue(Object.values(parsed)[0] as string | undefined, key)
-          }
-        } catch {
-          return this.toSecretValue(response.SecretString, key)
-        }
-      }
-      throw new SecretLoadError(`Secret ${key} has no SecretString`)
-    } catch (error) {
-      throw new SecretLoadError(`Failed to fetch secret from AWS Secrets Manager: ${key}`, error instanceof Error ? error : undefined)
+
+    const regions: string[] = [this.primaryRegion]
+    if (this.secondaryRegion) {
+      regions.push(this.secondaryRegion)
     }
+
+    let lastError: Error | undefined
+
+    for (let i = 0; i < regions.length; i++) {
+      try {
+        return await this.getFromRegion(regions[i], key)
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error))
+        if (i < regions.length - 1 && this.isRetryableError(error)) {
+          logger.warn({
+            event: 'secrets_failover',
+            from: this.primaryRegion,
+            to: regions[i + 1],
+          })
+          continue
+        }
+        throw new SecretLoadError(
+          `Failed to fetch secret from AWS Secrets Manager: ${key}`,
+          lastError,
+        )
+      }
+    }
+
+    throw new SecretLoadError(
+      `Failed to fetch secret from AWS Secrets Manager: ${key}`,
+      lastError,
+    )
+  }
+
+  private async getFromRegion(region: string, key: string): Promise<string> {
+    const { SecretsManagerClient, GetSecretValueCommand } = await import('@aws-sdk/client-secrets-manager')
+    const client = new SecretsManagerClient({ region })
+    const command = new GetSecretValueCommand({ SecretId: key })
+    const response = await client.send(command)
+
+    if (response.SecretString) {
+      try {
+        const parsed = JSON.parse(response.SecretString)
+        if (parsed && typeof parsed === 'object') {
+          this.secrets = BaseSecretAdapter.normalizeSecretValues(parsed)
+          return this.toSecretValue(Object.values(parsed)[0] as string | undefined, key)
+        }
+      } catch {
+        return this.toSecretValue(response.SecretString, key)
+      }
+    }
+    throw new SecretLoadError(`Secret ${key} has no SecretString`)
+  }
+
+  // Secondary region is DR fallback only, not a reconciliation source.
+  private isRetryableError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false
+
+    const err = error as Record<string, unknown>
+    const metadata = err.$metadata as Record<string, unknown> | undefined
+
+    if (metadata?.httpStatusCode && Number(metadata.httpStatusCode) >= 500) {
+      return true
+    }
+
+    if (!metadata) {
+      const name = String(err.name ?? '')
+      const message = String(err.message ?? '')
+      if (/timeout|network|connection|econnrefused|enotfound|etimedout/i.test(name + ' ' + message)) {
+        return true
+      }
+    }
+
+    return false
   }
 }
 
@@ -441,7 +483,8 @@ export function createSecretLoader(options: SecretLoaderOptions = {}): SecretAda
       if (!region) {
         throw new SecretLoadError('AWS_REGION is required when SECRET_PROVIDER=aws')
       }
-      primaryAdapter = new AwsSecretsAdapter(region)
+      const secondaryRegion = options.awsSecondaryRegion ?? process.env.AWS_SECONDARY_REGION
+      primaryAdapter = new AwsSecretsAdapter(region, secondaryRegion)
       break
     }
     case 'vault': {
