@@ -189,6 +189,7 @@ export class RedisIdempotencyStore implements IdempotencyStore {
 
   constructor(
     private client: RedisClientLike,
+    private readonlyClient?: RedisClientLike,
     private readonly options: { scanMatch?: string; scanCount?: number } = {},
   ) {}
 
@@ -253,16 +254,14 @@ export class RedisIdempotencyStore implements IdempotencyStore {
   }
 
   async get(key: string): Promise<IdempotencyEntry | undefined> {
-    const raw = await new Promise<string | null>((resolve, reject) => {
-      this.batch.push({ key, resolve, reject });
-      
-      if (this.batch.length >= this.maxBatchSize) {
-        this.flushBatch();
-      } else if (!this.batchTimer) {
-        this.batchTimer = setTimeout(this.flushBatch, this.batchWindowMs);
-      }
-    });
-
+    const readClient = this.readonlyClient ?? this.client;
+    let raw = await readClient.get(key);
+    
+    // Fallback to primary on staleness (cache miss)
+    if (!raw && this.readonlyClient) {
+      raw = await this.client.get(key);
+    }
+    
     if (!raw) return undefined;
     try {
       return JSON.parse(raw) as IdempotencyEntry;
@@ -762,8 +761,9 @@ export async function createRedisIdempotencyStore(): Promise<RedisIdempotencySto
   // single-process environments (tests, in-memory dev).
   const mod = (await import('../redis.js')) as {
     getRedisClient: () => RedisClientLike;
+    getReadonlyRedisClient: () => RedisClientLike;
   };
-  return new RedisIdempotencyStore(mod.getRedisClient());
+  return new RedisIdempotencyStore(mod.getRedisClient(), mod.getReadonlyRedisClient());
 }
 
 /**
