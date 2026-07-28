@@ -238,6 +238,8 @@ Optional `.env`:
 ```
 PORT=3000
 DATABASE_URL=postgresql://user:password@localhost:5432/veritasor
+# MIGRATION_LOCK_TIMEOUT_MS=5000
+# MIGRATION_STATEMENT_TIMEOUT_MS=60000
 ```
 
 ## Merging to remote
