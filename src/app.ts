@@ -39,40 +39,44 @@ import { initializeOpenTelemetry } from "./tracing.js";
 import {
   startIdempotencySweeper,
   type IdempotencySweeperHandle,
+  startIdempotencySweeperIfNeeded,
+  stopIdempotencySweeper,
 } from "./middleware/idempotency.js";
 import {
-  startDlqAgeScanner,
-  type DlqAgeScannerHandle,
-} from "./services/webhooks/deadLetterQueue.js";
+  startPgBouncerScraper,
+  stopPgBouncerScraper,
+  startPgBouncerScraperIfNeeded,
+  stopPgBouncerScraperIfNeeded,
+} from "./services/pgbouncerScraper.js";
 
 /**
- * Handle to the running idempotency sweeper, if one was started. Stored
- * at module scope so the production boot path and tests can share a
- * single instance, and so `stopIdempotencySweeper()` is idempotent.
+ * Handle to the running PgBouncer scraper timer.
+ * Stored at module scope so the production boot path and tests can share
+ * a single instance, and so `stopPgBouncerScraper()` is idempotent.
  */
-let idempotencySweeperHandle: IdempotencySweeperHandle | null = null;
+let pgbouncerScraperTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
- * Start the application-wide idempotency TTL sweeper.
+ * Start the PgBouncer stats scraper.
  *
- * No-op in test environments so unit tests can drive `runOnce()` and
- * timer injection without racing a real interval.
+ * No-op in test environments so unit tests can drive the scraper manually
+ * without racing a real interval.
  */
-export async function startIdempotencySweeperIfNeeded(): Promise<IdempotencySweeperHandle | null> {
-  if (process.env.NODE_ENV === 'test') return null;
-  if (idempotencySweeperHandle) return idempotencySweeperHandle;
-  idempotencySweeperHandle = await startIdempotencySweeper();
-  return idempotencySweeperHandle;
+export async function startPgBouncerScraperIfNeeded(): Promise<void> {
+  if (process.env.NODE_ENV === 'test') return;
+  if (pgbouncerScraperTimer) return;
+  await startPgBouncerScraper();
+  pgbouncerScraperTimer = setTimeout(() => {}, 0); // placeholder to track started state
 }
 
 /**
- * Stop the application-wide idempotency TTL sweeper, if one was started.
+ * Stop the PgBouncer stats scraper, if one was started.
  * Safe to call multiple times.
  */
-export async function stopIdempotencySweeper(): Promise<void> {
-  if (!idempotencySweeperHandle) return;
-  await idempotencySweeperHandle.stop();
-  idempotencySweeperHandle = null;
+export async function stopPgBouncerScraperIfNeeded(): Promise<void> {
+  if (!pgbouncerScraperTimer && process.env.NODE_ENV !== 'test') return;
+  await stopPgBouncerScraper();
+  pgbouncerScraperTimer = null;
 }
 
 let dlqAgeScannerHandle: DlqAgeScannerHandle | null = null;
@@ -219,7 +223,8 @@ export async function startServer(port: number): Promise<Server | HttpsServer> {
   // interval is unref'd and its `runOnce()` swallows store errors.
   await startIdempotencySweeperIfNeeded();
 
-  startDlqAgeScannerIfNeeded();
+  // Start the PgBouncer stats scraper for real-time queue depth monitoring.
+  await startPgBouncerScraperIfNeeded();
 
   const application = createApp(readinessReport);
   const { attachAttestationStream } = await import("./ws/attestationStream.js");
