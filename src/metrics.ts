@@ -92,9 +92,14 @@ export const idempotencySweepRunsTotal = new Counter({
   registers: [metricsRegistry],
 });
 
-export const webhookDlqOldestEntryAge = new Gauge({
-  name: "webhook_dlq_oldest_entry_age_seconds",
-  help: "Age of the oldest unprocessed webhook dead-letter queue entry in seconds",
-  labelNames: ["provider"] as const,
+export const redisCircuitBreakerState = new Gauge({
+  name: "redis_circuit_breaker_state",
+  help: "Current state of the Redis circuit breaker (0=closed, 1=open, 2=half-open)",
+  registers: [metricsRegistry],
+});
+
+export const redisCircuitBreakerFailuresTotal = new Counter({
+  name: "redis_circuit_breaker_failures_total",
+  help: "Total number of failed operations observed by the Redis circuit breaker",
   registers: [metricsRegistry],
 });
