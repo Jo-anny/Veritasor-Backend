@@ -226,3 +226,15 @@ export const webhookRetryExhaustedTotal = new Counter({
   labelNames: ["provider"] as const,
   registers: [metricsRegistry],
 });
+
+export const redisCircuitBreakerState = new Gauge({
+  name: "redis_circuit_breaker_state",
+  help: "Redis circuit breaker state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)",
+  registers: [metricsRegistry],
+});
+
+export const redisCircuitBreakerFailuresTotal = new Counter({
+  name: "redis_circuit_breaker_failures_total",
+  help: "Total number of Redis circuit breaker failures recorded",
+  registers: [metricsRegistry],
+});
