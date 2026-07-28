@@ -108,6 +108,10 @@ slsa-verifier verify-artifact veritasor-backend-<tag>.tgz \
 
 A structural gate also runs locally/offline: `npm run verify:provenance -- --provenance <file> --artifact <file> --source-repo github.com/aburex12345/Veritasor-Backend`. Full details: [docs/slsa-provenance.md](docs/slsa-provenance.md).
 
+## Authorization
+
+Protected integration operations use an explicit action-on-resource RBAC policy with verified tenant scope and audit logging. See [the policy engine guide](docs/rbac-policy-engine.md).
+
 ## Security Tests
 
 [![Security Tests](https://github.com/Veritasor/Veritasor-Backend/actions/workflows/security-tests.yml/badge.svg)](https://github.com/Veritasor/Veritasor-Backend/actions/workflows/security-tests.yml)
