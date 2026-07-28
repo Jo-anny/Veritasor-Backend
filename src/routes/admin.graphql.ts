@@ -10,8 +10,6 @@ import * as userRepository from '../repositories/userRepository.js';
 import { Counter } from 'prom-client';
 import { metricsRegistry } from '../metrics.js';
 import { getRedisClient } from '../redis.js';
-import DataLoader from 'dataloader';
-import { attestationRepository } from '../repositories/attestation.js';
 
 const graphqlMutationRejections = new Counter({
   name: 'graphql_admin_mutation_rejections_total',
