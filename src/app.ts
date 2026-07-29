@@ -30,6 +30,7 @@ import { integrationsStripeRouter } from "./routes/integrations-stripe.js";
 import { publicAttestationsRouter } from "./routes/publicAttestations.js";
 import usersRouter from "./routes/users.js";
 import { jwksManager } from "./utils/jwks.js";
+import { formatCacheControl, CACHE_POLICIES } from "./utils/cachePolicy.js";
 import { razorpayWebhookRouter } from "./routes/webhooks-razorpay.js";
 import { webhookEgressIpsRouter } from "./routes/webhookEgressIps.js";
 import adminRouter from "./routes/admin.js";
@@ -134,7 +135,13 @@ export function createApp(readinessReport: StartupReadinessReport): Express {
     const etag = jwksManager.getEtag()
     const cacheSeconds = jwksManager.getCacheTtlSeconds()
 
-    setCacheControl(res, CachePolicies.JWKS_DOCUMENT(cacheSeconds))
+    const jwksPolicy = CACHE_POLICIES.find((p) => p.name === 'jwks');
+    res.set(
+      "Cache-Control",
+      jwksPolicy
+        ? formatCacheControl(jwksPolicy.directives)
+        : `public, max-age=${cacheSeconds}, stale-while-revalidate=60`,
+    );
     res.set("ETag", etag)
     res.json(jwks)
   });
