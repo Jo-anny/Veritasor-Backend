@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { BASE_FEE, Contract, Keypair, StrKey, TransactionBuilder, nativeToScVal, rpc, scValToNative } from '@stellar/stellar-sdk';
 import { createSorobanRpcServer, getSorobanConfig } from './client.js';
 import { getSorobanBatchedSubmissionFlag } from '../features/flags.js';
@@ -10,6 +11,8 @@ import {
   sorobanCurrentFee,
   sorobanFeeVolatility,
   sorobanFeeSpikeProtectionsTotal,
+  sorobanAttestationDedupeHitsTotal,
+  sorobanAttestationDedupeErrorsTotal,
 } from '../../metrics.js';
 
 export class SorobanSubmissionError extends Error {
@@ -46,6 +49,203 @@ const CONFIRMATION_MAX_ATTEMPTS = 15;
 
 /** Valid hex hash: 64 lowercase hex chars. */
 const TX_HASH_RE = /^[0-9a-f]{64}$/;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Cross-batch idempotency deduplication
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Retries can enqueue the same attestation into multiple Soroban submission
+// batches.  This layer computes a deterministic SHA-256 hash of the
+// attestation parameters and stores it in Redis with a TTL that covers the
+// longest realistic retry window.  When the hash is already present the
+// submission is skipped and the caller receives a `deduped` status so the
+// upstream queue processor can move on.
+//
+// Redis unavailability is never fatal: when the dedupe store is unreachable
+// we log a warning, increment the error counter, and proceed with the
+// submission so attestations are never silently dropped.
+
+/**
+ * Redis key prefix for the attestation dedupe set.
+ *
+ * The key is <prefix>:<sha256-hex> so every lookup is O(1).
+ * TTL is set via PEXPIRE at insertion time.
+ */
+const ATTESTATION_DEDUPE_PREFIX = 'attestation:dedupe'
+
+/**
+ * Default dedupe TTL: 5 minutes covers the worst-case retry window
+ * (30 s confirmation polling × multiple batch insert retries).
+ * Tunable via ATTESTATION_DEDUPE_TTL_MS env var.
+ */
+export const DEFAULT_ATTESTATION_DEDUPE_TTL_MS = 5 * 60 * 1000
+
+/** Minimum allowed TTL to prevent accidental zero-TTL (permanent keys). */
+export const MIN_ATTESTATION_DEDUPE_TTL_MS = 30_000
+
+/** Resolve the effective dedupe TTL from env or default. */
+export function resolveAttestationDedupeTtlMs(): number {
+  const raw = process.env.ATTESTATION_DEDUPE_TTL_MS
+  if (raw == null || raw === '') return DEFAULT_ATTESTATION_DEDUPE_TTL_MS
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
+    return DEFAULT_ATTESTATION_DEDUPE_TTL_MS
+  }
+  return Math.max(MIN_ATTESTATION_DEDUPE_TTL_MS, parsed)
+}
+
+/**
+ * Compute a deterministic dedupe key from attestation parameters.
+ *
+ * The hash covers business, period, merkleRoot, timestamp, and version —
+ * the same attestation submitted by different signers or with different
+ * nonces will still collide on this key.
+ */
+export function computeAttestationDedupeKey(params: SubmitAttestationParams): string {
+  const canonical = [
+    params.business,
+    params.period,
+    params.merkleRoot,
+    String(params.timestamp),
+    params.version,
+  ].join('|')
+  return createHash('sha256').update(canonical).digest('hex')
+}
+
+/** Minimal redis interface needed for dedupe lookups. */
+export interface DedupeRedisClient {
+  get(key: string): Promise<string | null>
+  set(key: string, value: string, px: 'PX', ms: number): Promise<unknown>
+}
+
+/**
+ * Check whether an attestation with the given params has already been
+ * submitted (or is in-flight) within the dedupe window.
+ *
+ * Returns `true` when the dedupe key exists (hash hit — skip submission),
+ * or `false` when it is absent (hash miss — proceed with submission).
+ *
+ * On Redis errors the function returns `false` (fail-open) so no
+ * attestation is ever blocked by a transient Redis blip.
+ */
+export async function checkAttestationDedupe(
+  params: SubmitAttestationParams,
+  redisClient: Pick<DedupeRedisClient, 'get'>,
+): Promise<boolean> {
+  const key = `${ATTESTATION_DEDUPE_PREFIX}:${computeAttestationDedupeKey(params)}`
+  try {
+    const existing = await redisClient.get(key)
+    if (existing !== null) {
+      sorobanAttestationDedupeHitsTotal.inc({ outcome: 'hit' })
+      logger.info({
+        event: 'attestation_dedupe_hit',
+        business: params.business,
+        period: params.period,
+        merkleRoot: params.merkleRoot,
+      })
+      return true
+    }
+    sorobanAttestationDedupeHitsTotal.inc({ outcome: 'miss' })
+    return false
+  } catch (err) {
+    sorobanAttestationDedupeErrorsTotal.inc()
+    logger.warn({
+      event: 'attestation_dedupe_error',
+      error: err instanceof Error ? err.message : String(err),
+    })
+    // Fail-open: proceed with submission
+    return false
+  }
+}
+
+/**
+ * Mark an attestation as submitted in the dedupe store after a successful
+ * submission (or as soon as the transaction is sent, to cover in-flight).
+ *
+ * Setting the mark before confirmation prevents duplicate submissions
+ * while a transaction is still awaiting finality.
+ */
+export async function markAttestationSubmitted(
+  params: SubmitAttestationParams,
+  txHash: string,
+  redisClient: Pick<DedupeRedisClient, 'set'>,
+  ttlMs: number = resolveAttestationDedupeTtlMs(),
+): Promise<void> {
+  const key = `${ATTESTATION_DEDUPE_PREFIX}:${computeAttestationDedupeKey(params)}`
+  try {
+    await redisClient.set(key, txHash, 'PX', ttlMs)
+  } catch (err) {
+    sorobanAttestationDedupeErrorsTotal.inc()
+    logger.warn({
+      event: 'attestation_dedupe_mark_failed',
+      txHash,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    // Best-effort: mark failure does not invalidate the submission
+  }
+}
+
+/**
+ * Lazy reference to the Redis dedupe client.
+ *
+ * Uses a getter pattern so that the Redis module is only imported when
+ * the dedupe functions are actually called. Null when Redis is not
+ * configured (the dedupe layer silently no-ops).
+ */
+let _dedupeRedisClient: DedupeRedisClient | null | undefined
+
+async function getDedupeRedisClient(): Promise<DedupeRedisClient | null> {
+  if (_dedupeRedisClient !== undefined) return _dedupeRedisClient
+
+  const hasRedis =
+    Boolean(process.env.REDIS_URL) || Boolean(process.env.REDIS_CLUSTER_NODES)
+  if (!hasRedis) {
+    _dedupeRedisClient = null
+    return null
+  }
+
+  try {
+    const mod = await import('../../redis.js')
+    _dedupeRedisClient = mod.getRedisClient() as unknown as DedupeRedisClient
+    return _dedupeRedisClient
+  } catch {
+    _dedupeRedisClient = null
+    return null
+  }
+}
+
+/**
+ * Convenience: check dedupe and, on miss, return false (no-op).
+ * On hit, throws a `SorobanSubmissionError` with code `DEDUPED` so
+ * the caller can distinguish this case from a real submission failure.
+ */
+export async function assertNotDuplicate(
+  params: SubmitAttestationParams,
+): Promise<void> {
+  const redisClient = await getDedupeRedisClient()
+  if (!redisClient) return // No Redis configured — skip dedupe
+
+  const isDuplicate = await checkAttestationDedupe(params, redisClient)
+  if (isDuplicate) {
+    throw new SorobanSubmissionError(
+      `Attestation for business ${params.business} period ${params.period} was already submitted.`,
+      'DEDUPED',
+    )
+  }
+}
+
+/**
+ * Convenience: mark an attestation as submitted in the dedupe store.
+ */
+export async function markAsSubmitted(
+  params: SubmitAttestationParams,
+  txHash: string,
+): Promise<void> {
+  const redisClient = await getDedupeRedisClient()
+  if (!redisClient) return
+
+  await markAttestationSubmitted(params, txHash, redisClient)
+}
 
 /**
  * Global singleton adaptive batch-size controller.
@@ -316,6 +516,14 @@ export async function submitAttestation(params: SubmitAttestationParams): Promis
   const shouldSubmit = params.submit ?? true;
   const signerSecret = params.signerSecret ?? process.env.SOROBAN_SOURCE_SECRET;
 
+  // Cross-batch dedupe: check whether this attestation has already been
+  // submitted (or is in-flight) within the dedupe window. Throws
+  // SorobanSubmissionError with code 'DEDUPED' when a hit is found.
+  // Fail-open: Redis errors do not block submissions.
+  if (shouldSubmit) {
+    await assertNotDuplicate(params);
+  }
+
   if (params.userId) {
     try {
       const useBatched = await getSorobanBatchedSubmissionFlag({
@@ -389,6 +597,13 @@ export async function submitAttestation(params: SubmitAttestationParams): Promis
 
     if (response.status === 'ERROR' || response.status === 'TRY_AGAIN_LATER') {
       throw new SorobanSubmissionError(mapSendResponseError(response), 'SUBMIT_FAILED', response);
+    }
+
+    // Mark the attestation as in-flight in the dedupe store BEFORE
+    // waiting for confirmation so that retries within the TTL window
+    // are caught by the dedupe check above.
+    if (shouldSubmit) {
+      markAsSubmitted(params, response.hash).catch(() => {});
     }
 
     // Poll for transaction confirmation and validate the on-chain result.
