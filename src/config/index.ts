@@ -50,6 +50,9 @@ export const envSchema = z.object({
   VAULT_TOKEN: z.string().optional(),
   ROLE_PROMOTION_TTL_MINUTES: z.string().optional(),
   ENABLE_INTROSPECTION: z.string().optional(),
+  GRAPHQL_DEV_BYPASS: z.string().optional(),
+  ALLOW_ARBITRARY_OPERATIONS: z.string().optional(),
+  PERSISTED_QUERY_SECRET: z.string().optional(),
 }).superRefine((data, ctx) => {
   if (data.NODE_ENV === "production") {
       if (!data.ALLOWED_ORIGINS || data.ALLOWED_ORIGINS.trim() === "") {
@@ -144,6 +147,17 @@ function parseDecimalEnv(name: string, rawValue: string | undefined, defaultValu
   return value;
 }
 
+function parseCsvList(rawValue: string | undefined): string[] {
+  if (!rawValue?.trim()) {
+    return [];
+  }
+
+  return rawValue
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 let parsedEnv: z.infer<typeof envSchema>;
 
 try {
@@ -182,16 +196,6 @@ export function getAllowedOrigins(): string | string[] {
     return [];
   }
   return "*";
-}
-
-function parseCsvList(raw: string | undefined): string[] {
-  if (!raw?.trim()) {
-    return [];
-  }
-  return raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
 }
 
 function parseMtlsConfig(parsedEnv: z.infer<typeof envSchema>) {
@@ -414,5 +418,14 @@ export const config = {
     enableIntrospection: parsedEnv.ENABLE_INTROSPECTION !== undefined
       ? parseBooleanEnv("ENABLE_INTROSPECTION", parsedEnv.ENABLE_INTROSPECTION, true)
       : !isProduction,
+    /**
+     * Controls whether arbitrary (ad-hoc) GraphQL operations are allowed.
+     * In production, defaults to false (enforces persisted query allow-list).
+     * Retains dev bypass toggle via GRAPHQL_DEV_BYPASS or ALLOW_ARBITRARY_OPERATIONS env var.
+     */
+    allowArbitraryOperations: (parsedEnv.GRAPHQL_DEV_BYPASS !== undefined || parsedEnv.ALLOW_ARBITRARY_OPERATIONS !== undefined)
+      ? parseBooleanEnv("GRAPHQL_DEV_BYPASS", parsedEnv.GRAPHQL_DEV_BYPASS ?? parsedEnv.ALLOW_ARBITRARY_OPERATIONS, false)
+      : !isProduction,
+    persistedQuerySecret: parsedEnv.PERSISTED_QUERY_SECRET || 'default-dev-secret-do-not-use-in-prod',
   },
 } as const;
