@@ -37,6 +37,13 @@ export const mtlsHandshakeFailuresTotal = new Counter({
   registers: [metricsRegistry],
 });
 
+export const mtlsReloadsTotal = new Counter({
+  name: "mtls_reloads_total",
+  help: "Total number of mTLS certificate reloads",
+  labelNames: ["outcome"] as const,
+  registers: [metricsRegistry],
+});
+
 export const rateLimitRejections = new Counter({
   name: "http_rate_limit_rejections_total",
   help: "Total number of requests rejected by the rate limiter (HTTP 429)",
