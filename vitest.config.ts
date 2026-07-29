@@ -2,6 +2,7 @@ export default {
   test: {
     globals: true,
     environment: 'node',
+    pool: 'vmForks',
     include: ['tests/**/*.test.ts', 'tests/**/*.spec.ts', 'src/**/*.test.ts', 'src/**/*.spec.ts'],
     env: {
       DATABASE_URL: "postgres://localhost:5432/test_db",
@@ -17,11 +18,6 @@ export default {
       include: ["src/**/*.ts", "src/**/*.js"],
       exclude: ["src/**/*.d.ts", "src/index.ts"],
       reportsDirectory: "coverage",
-    },
-    server: {
-      deps: {
-        inline: ["C:"],
-      },
     },
   },
 };
