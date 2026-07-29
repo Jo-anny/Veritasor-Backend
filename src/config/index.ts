@@ -43,6 +43,8 @@ export const envSchema = z.object({
   SOROBAN_ADAPTIVE_BATCH_SENSITIVITY: z.string().optional(),
   SOROBAN_ADAPTIVE_BATCH_VOLATILITY_DAMPENING: z.string().optional(),
   SOROBAN_ADAPTIVE_BATCH_SAMPLE_INTERVAL_MS: z.string().optional(),
+  DRR_SCHEDULER_TIER_WEIGHTS: z.string().optional(),
+  DRR_SCHEDULER_QUANTUM: z.string().optional(),
   SECRET_LOADER: z.enum(["env", "file", "vault"]).default("env"),
   SECRET_FILE_PATH: z.string().optional(),
   VAULT_BASE_URL: z.string().url().optional(),
@@ -145,17 +147,6 @@ function parseDecimalEnv(name: string, rawValue: string | undefined, defaultValu
   }
 
   return value;
-}
-
-function parseCsvList(rawValue: string | undefined): string[] {
-  if (!rawValue?.trim()) {
-    return [];
-  }
-
-  return rawValue
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
 }
 
 let parsedEnv: z.infer<typeof envSchema>;
@@ -382,6 +373,23 @@ export const config = {
         "SOROBAN_ADAPTIVE_BATCH_SAMPLE_INTERVAL_MS",
         parsedEnv.SOROBAN_ADAPTIVE_BATCH_SAMPLE_INTERVAL_MS,
         60_000,
+      ),
+    },
+    drrScheduler: {
+      /**
+       * JSON-serialised tier-weight table for the DRR scheduler.
+       * Example: '{"free":1,"starter":2,"growth":4,"enterprise":8}'
+       * Parsed and validated at runtime by {@link resolveTierWeights}.
+       */
+      tierWeightsRaw: parsedEnv.DRR_SCHEDULER_TIER_WEIGHTS,
+      /**
+       * DRR quantum — credits awarded per tenant per round.
+       * Higher quantum = larger burst slice per round, still fair overall.
+       */
+      quantum: parsePositiveIntEnv(
+        "DRR_SCHEDULER_QUANTUM",
+        parsedEnv.DRR_SCHEDULER_QUANTUM,
+        10,
       ),
     },
   },

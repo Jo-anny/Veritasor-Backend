@@ -229,6 +229,51 @@ export const sorobanFeeSpikeProtectionsTotal = new Counter({
   registers: [metricsRegistry],
 });
 
+/**
+ * Deficit Round-Robin (DRR) fair-batch-scheduler metrics.
+ *
+ * - `soroban_drr_queue_wait_ms` (histogram, labels: tenant): milliseconds an
+ *   item spent waiting in the per-tenant queue before being dequeued into a
+ *   batch. Useful for detecting starvation (tail latency per tenant).
+ *
+ * - `soroban_drr_queue_depth` (gauge, labels: tenant): current number of
+ *   items in the tenant's queue. Spikes indicate a noisy tenant is
+ *   enqueueing faster than the scheduler can drain.
+ *
+ * - `soroban_drr_scheduler_rounds_total` (counter): total DRR rounds
+ *   executed. One round visits every non-empty tenant once.
+ *
+ * - `soroban_drr_dequeues_total` (counter, labels: tenant): total items
+ *   removed from a tenant's queue and placed into a batch.
+ */
+export const sorobanDrrQueueWaitMs = new Histogram({
+  name: 'soroban_drr_queue_wait_ms',
+  help: 'Milliseconds an attestation item spent waiting in the DRR batch queue per tenant',
+  labelNames: ['tenant'] as const,
+  buckets: [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
+  registers: [metricsRegistry],
+});
+
+export const sorobanDrrQueueDepth = new Gauge({
+  name: 'soroban_drr_queue_depth',
+  help: 'Current number of attestation items waiting in the DRR batch queue per tenant',
+  labelNames: ['tenant'] as const,
+  registers: [metricsRegistry],
+});
+
+export const sorobanDrrSchedulerRoundsTotal = new Counter({
+  name: 'soroban_drr_scheduler_rounds_total',
+  help: 'Total number of Deficit Round-Robin scheduler rounds executed',
+  registers: [metricsRegistry],
+});
+
+export const sorobanDrrDequeuesTotal = new Counter({
+  name: 'soroban_drr_dequeues_total',
+  help: 'Total number of items dequeued from tenant queues by the DRR scheduler',
+  labelNames: ['tenant'] as const,
+  registers: [metricsRegistry],
+});
+
 export const webhookRetryAttempts = new Histogram({
   name: "webhook_retry_attempts",
   help: "Number of retry attempts made when processing a webhook event",
