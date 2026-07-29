@@ -247,6 +247,29 @@ export const redisCircuitBreakerFailuresTotal = new Counter({
 });
 
 /**
+ * Cross-batch idempotency deduplication for Soroban attestations.
+ *
+ * - `soroban_attestation_dedupe_hits_total` (counter): number of
+ *   attestation submissions skipped because a matching hash was found
+ *   in the Redis dedupe set. Tagged with `outcome` (`hit` or `miss`).
+ *
+ * - `soroban_attestation_dedupe_errors_total` (counter): failures
+ *   encountered while querying the dedupe store.
+ */
+export const sorobanAttestationDedupeHitsTotal = new Counter({
+  name: "soroban_attestation_dedupe_hits_total",
+  help: "Total number of attestation submissions deduplicated across batches",
+  labelNames: ["outcome"] as const,
+  registers: [metricsRegistry],
+});
+
+export const sorobanAttestationDedupeErrorsTotal = new Counter({
+  name: "soroban_attestation_dedupe_errors_total",
+  help: "Total number of attestation dedupe store errors",
+  registers: [metricsRegistry],
+});
+
+/**
  * Attestation submit latency histogram.
  * Tuned to resolve well around the 50-200ms SLO.
  *
