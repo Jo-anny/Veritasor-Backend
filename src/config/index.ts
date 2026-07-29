@@ -314,6 +314,7 @@ export const config = {
     /** HTTP methods allowed for cross-origin requests. */
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   },
+  mtls: mtlsConfig,
   jobs: {
     attestationReminder: {
       // Run every minute
