@@ -34,10 +34,13 @@
 import { Router, Request, Response } from "express";
 import {
   getSignedManifest,
-  MANIFEST_CACHE_TTL_SECONDS,
 } from "../services/webhooks/egressIpAllowList.js";
 import { logger } from "../utils/logger.js";
-import { CachePolicies, setCacheControl } from "../utils/cacheControl.js";
+import { formatCacheControl, CACHE_POLICIES } from "../utils/cachePolicy.js";
+
+const egressPolicy = CACHE_POLICIES.find(
+  (p) => p.name === 'webhook-egress-ips',
+);
 
 export const webhookEgressIpsRouter = Router();
 
@@ -47,7 +50,12 @@ webhookEgressIpsRouter.get(
     try {
       const signed = await getSignedManifest();
 
-      setCacheControl(res, CachePolicies.WEBHOOK_EGRESS_IPS(MANIFEST_CACHE_TTL_SECONDS));
+      res.set(
+        "Cache-Control",
+        egressPolicy
+          ? formatCacheControl(egressPolicy.directives)
+          : "public, max-age=3600, stale-while-revalidate=60"
+      );
       res.set("Content-Type", "application/json; charset=utf-8");
 
       res.json(signed);
