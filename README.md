@@ -13,7 +13,48 @@ API gateway and attestation service for Veritasor. Handles revenue data normaliz
 - Node.js 18+
 - npm or yarn
 
-## Setup
+## Developer Quickstart (Docker Compose)
+
+The fastest way to get a working development environment is with the included docker-compose stack:
+
+```bash
+# 1. Start Postgres, Redis, and mock Soroban RPC
+docker compose -f ops/dev/docker-compose.yml up -d
+
+# 2. Copy and review environment configuration
+cp .env.example .env
+
+# 3. Install dependencies
+npm install
+
+# 4. Apply database migrations
+npm run migrate
+
+# 5. Run the API in development mode
+npm run dev
+```
+
+The compose file provisions:
+
+| Service  | Port  | Purpose                                      |
+|----------|-------|----------------------------------------------|
+| Postgres | 5432  | Application database with pre-seeded dev data |
+| Redis    | 6379  | Caching, rate limiting, idempotency          |
+| Soroban  | 8000  | Mock Soroban RPC for local attestation flows  |
+
+**Seed data** (tables + data applied automatically on first container start — no separate migration step needed for the seed):
+- Dev user: `dev@veritasor.local` / `devpassword123`
+- Dev business: "Veritasor Demo Inc." owned by the dev user
+- Sample attestation record
+
+To tear down and reset:
+```bash
+docker compose -f ops/dev/docker-compose.yml down -v
+```
+
+## Manual Setup
+
+If you prefer to run services natively:
 
 ```bash
 # Install dependencies
