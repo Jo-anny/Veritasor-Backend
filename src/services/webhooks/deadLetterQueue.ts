@@ -1,4 +1,4 @@
-import { db } from '../../config/database';
+import { db } from '../../db/client.js';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { KMSClient, EncryptCommand, DecryptCommand } from '@aws-sdk/client-kms';
 import { randomUUID } from 'crypto';
@@ -285,7 +285,7 @@ export class DeadLetterQueue {
   }
 
   // ============================================
-  # Private Methods
+  // Private Methods
   // ============================================
 
   private generateArchiveKey(entry: any): string {
