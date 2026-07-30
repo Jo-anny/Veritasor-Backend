@@ -312,6 +312,12 @@ Optional `.env`:
 ```
 PORT=3000
 DATABASE_URL=postgresql://user:password@localhost:5432/veritasor
+# Redis Configuration (Standalone, Cluster, or Sentinel)
+# REDIS_URL=redis://localhost:6379
+# REDIS_CLUSTER_NODES=localhost:7000,localhost:7001
+REDIS_MODE=sentinel
+REDIS_SENTINELS=localhost:26379,localhost:26380
+REDIS_SENTINEL_NAME=mymaster
 # MIGRATION_LOCK_TIMEOUT_MS=5000
 # MIGRATION_STATEMENT_TIMEOUT_MS=60000
 ```
