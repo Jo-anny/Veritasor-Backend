@@ -14,6 +14,10 @@ DEFAULT_SIGMA_MULTIPLIER = 2
 DEFAULT_ROLLING_WINDOW = 3
 ```
 
+## Regression Contract
+
+This fixture set acts as the baseline contract for threshold tuning. If a tuning change widens or narrows the drop or spike sensitivity, the fixture labels, expected flags, and the associated threshold snapshot should be reviewed together before merge.
+
 ## Primary Fixtures
 
 ### 1. Clean Baseline — MUST NOT FLAG
